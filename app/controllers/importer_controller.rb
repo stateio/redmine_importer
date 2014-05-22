@@ -26,6 +26,7 @@ class ImporterController < ApplicationController
   def index
   end
 
+  
   def match
     # Delete existing iip to ensure there can't be two iips for a user
     ImportInProgress.delete_all(["user_id = ?",User.current.id])
@@ -43,71 +44,16 @@ class ImporterController < ApplicationController
     @import_timestamp = iip.created.strftime("%Y-%m-%d %H:%M:%S")
     @original_filename = params[:file].original_filename
     
-    # display sample
-    sample_count = 5
-    i = 0
-    @samples = []
+    validate_csv_data(iip.csv_data)
+    return if flash[:error].present?
+
+    sample_data(iip)
+    return if flash[:error].present?
+
+    set_csv_headers(iip)
+    return if flash[:error].present?
+      
     
-    begin
-      if iip.csv_data.lines.to_a.size <= 1
-        flash[:error] = 'No data line in your CSV, check the encoding of the file<br/><br/>Header :<br/>'.html_safe +
-          iip.csv_data
-
-        redirect_to importer_index_path(:project_id => @project)
-
-        return
-      end
-
-      CSV.new(iip.csv_data, {:headers=>true,
-                            :encoding=>iip.encoding,
-                             :quote_char=>iip.quote_char,
-                             :col_sep=>iip.col_sep}).each do |row|
-        @samples[i] = row
-        i += 1
-        if i >= sample_count
-          break
-        end
-      end # do
-    rescue Exception => e
-      csv_data_lines = iip.csv_data.lines.to_a
-
-      error_message = e.message +
-        '<br/><br/>Header :<br/>'.html_safe +
-        csv_data_lines[0]
-
-      if csv_data_lines.size > 0
-        error_message += '<br/><br/>Error on header or line :<br/>'.html_safe +
-          csv_data_lines[@samples.size + 1]
-      end
-
-      flash[:error] = error_message
-
-      redirect_to importer_index_path(:project_id => @project)
-
-      return
-    end
-
-    if @samples.size > 0
-      @headers = @samples[0].headers
-    end
-    
-    missing_header_columns = ''
-    @headers.each_with_index{|h, i|
-      if h.nil?
-        missing_header_columns += " #{i+1}"
-      end
-    }
-
-    if missing_header_columns.present?
-      flash[:error] = 'Column header missing : ' + missing_header_columns + " / #{@headers.size}" +
-        '<br/><br/>Header :<br/>'.html_safe +
-        iip.csv_data.lines.to_a[0]
-
-      redirect_to importer_index_path(:project_id => @project)
-
-      return
-    end
-
     # fields
     @attrs = Array.new
     ISSUE_ATTRS.each do |attr|
@@ -123,90 +69,6 @@ class ImporterController < ApplicationController
     @attrs.sort!
   end
   
-  # Returns the issue object associated with the given value of the given attribute.
-  # Raises NoIssueForUniqueValue if not found or MultipleIssuesForUniqueValue
-  def issue_for_unique_attr(unique_attr, attr_value, row_data)
-    if @issue_by_unique_attr.has_key?(attr_value)
-      return @issue_by_unique_attr[attr_value]
-    end
-
-    if unique_attr == "id"
-      issues = [Issue.find_by_id(attr_value)]
-    else
-      # Use IssueQuery class Redmine >= 2.3.0
-      begin
-        if Module.const_get('IssueQuery') && IssueQuery.is_a?(Class)
-          query_class = IssueQuery
-        end
-      rescue NameError
-        query_class = Query
-      end
-
-      query = query_class.new(:name => "_importer", :project => @project)
-      query.add_filter("status_id", "*", [1])
-      query.add_filter(unique_attr, "=", [attr_value])
-      
-      issues = Issue.find :all, :conditions => query.statement, :limit => 2, :include => [ :assigned_to, :status, :tracker, :project, :priority, :category, :fixed_version ]
-    end
-    
-    if issues.size > 1
-      @failed_count += 1
-      @failed_issues[@failed_count] = row_data
-      @messages << "Warning: Unique field #{unique_attr} with value '#{attr_value}' in issue #{@failed_count} has duplicate record"
-      raise MultipleIssuesForUniqueValue, "Unique field #{unique_attr} with value '#{attr_value}' has duplicate record"
-      else
-      if issues.size == 0
-        raise NoIssueForUniqueValue, "No issue with #{unique_attr} of '#{attr_value}' found"
-      end
-      issues.first
-    end
-  end
-
-  # Returns the id for the given user or raises RecordNotFound
-  # Implements a cache of users based on login name
-  def user_for_login!(login)
-    begin
-      if !@user_by_login.has_key?(login)
-        @user_by_login[login] = User.find_by_login!(login)
-      end
-    rescue ActiveRecord::RecordNotFound
-      if params[:use_anonymous]
-        @user_by_login[login] = User.anonymous()
-      else
-        @unfound_class = "User"
-        @unfound_key = login
-        raise
-      end
-    end
-    @user_by_login[login]
-  end
-  def user_id_for_login!(login)
-    user = user_for_login!(login)
-    user ? user.id : nil
-  end
-    
-  
-  # Returns the id for the given version or raises RecordNotFound.
-  # Implements a cache of version ids based on version name
-  # If add_versions is true and a valid name is given,
-  # will create a new version and save it when it doesn't exist yet.
-  def version_id_for_name!(project,name,add_versions)
-    if !@version_id_by_name.has_key?(name)
-      version = Version.find_by_project_id_and_name(project.id, name)
-      if !version
-        if name && (name.length > 0) && add_versions
-          version = project.versions.build(:name=>name)
-          version.save
-        else
-          @unfound_class = "Version"
-          @unfound_key = name
-          raise ActiveRecord::RecordNotFound, "No version named #{name}"
-        end
-      end
-      @version_id_by_name[name] = version.id
-    end
-    @version_id_by_name[name]
-  end
   
   def result
     @handle_count = 0
@@ -554,5 +416,160 @@ private
     flash[type] ||= ""
     flash[type] += "#{text}<br/>"
   end
+
+  def validate_csv_data(csv_data)
+    if csv_data.lines.to_a.size <= 1
+      flash[:error] = 'No data line in your CSV, check the encoding of the file<br/><br/>Header :<br/>'.html_safe + csv_data
+
+      redirect_to importer_index_path(:project_id => @project)
+
+      return
+    end
+  end
+
+  def sample_data(iip)
+    # display sample
+    sample_count = 5
+    @samples = []
+
+    begin
+      CSV.new(iip.csv_data, {:headers=>true,
+                             :encoding=>iip.encoding,
+                             :quote_char=>iip.quote_char,
+                             :col_sep=>iip.col_sep}).each_with_index do |row, i|
+                               @samples[i] = row
+                               break if i >= sample_count
+                             end # do
+
+    rescue Exception => e
+      csv_data_lines = iip.csv_data.lines.to_a
+
+      error_message = e.message +
+        '<br/><br/>Header :<br/>'.html_safe +
+        csv_data_lines[0]
+
+      # if there was an exception, probably happened on line after the last sampled.
+      if csv_data_lines.size > 0
+        error_message += '<br/><br/>Error on header or line :<br/>'.html_safe +
+          csv_data_lines[@samples.size + 1]
+      end
+
+      flash[:error] = error_message
+
+      redirect_to importer_index_path(:project_id => @project)
+
+      return
+    end
+  end
+
+  def set_csv_headers(iip)
+    if @samples.size > 0
+      @headers = @samples[0].headers
+    end
+
+    missing_header_columns = ''
+    @headers.each_with_index{|h, i|
+      if h.nil?
+        missing_header_columns += " #{i+1}"
+      end
+    }
+
+    if missing_header_columns.present?
+      flash[:error] = 'Column header missing : ' + missing_header_columns + " / #{@headers.size}" +
+      '<br/><br/>Header :<br/>'.html_safe +
+        iip.csv_data.lines.to_a[0]
+
+      redirect_to importer_index_path(:project_id => @project)
+
+      return
+    end
+
+  end
+
+  # Returns the issue object associated with the given value of the given attribute.
+  # Raises NoIssueForUniqueValue if not found or MultipleIssuesForUniqueValue
+  def issue_for_unique_attr(unique_attr, attr_value, row_data)
+    if @issue_by_unique_attr.has_key?(attr_value)
+      return @issue_by_unique_attr[attr_value]
+    end
+
+    if unique_attr == "id"
+      issues = [Issue.find_by_id(attr_value)]
+    else
+      # Use IssueQuery class Redmine >= 2.3.0
+      begin
+        if Module.const_get('IssueQuery') && IssueQuery.is_a?(Class)
+          query_class = IssueQuery
+        end
+      rescue NameError
+        query_class = Query
+      end
+
+      query = query_class.new(:name => "_importer", :project => @project)
+      query.add_filter("status_id", "*", [1])
+      query.add_filter(unique_attr, "=", [attr_value])
+      
+      issues = Issue.find :all, :conditions => query.statement, :limit => 2, :include => [ :assigned_to, :status, :tracker, :project, :priority, :category, :fixed_version ]
+    end
+    
+    if issues.size > 1
+      @failed_count += 1
+      @failed_issues[@failed_count] = row_data
+      @messages << "Warning: Unique field #{unique_attr} with value '#{attr_value}' in issue #{@failed_count} has duplicate record"
+      raise MultipleIssuesForUniqueValue, "Unique field #{unique_attr} with value '#{attr_value}' has duplicate record"
+      else
+      if issues.size == 0
+        raise NoIssueForUniqueValue, "No issue with #{unique_attr} of '#{attr_value}' found"
+      end
+      issues.first
+    end
+  end
+
+  # Returns the id for the given user or raises RecordNotFound
+  # Implements a cache of users based on login name
+  def user_for_login!(login)
+    begin
+      if !@user_by_login.has_key?(login)
+        @user_by_login[login] = User.find_by_login!(login)
+      end
+    rescue ActiveRecord::RecordNotFound
+      if params[:use_anonymous]
+        @user_by_login[login] = User.anonymous()
+      else
+        @unfound_class = "User"
+        @unfound_key = login
+        raise
+      end
+    end
+    @user_by_login[login]
+  end
+  def user_id_for_login!(login)
+    user = user_for_login!(login)
+    user ? user.id : nil
+  end
+    
+  
+  # Returns the id for the given version or raises RecordNotFound.
+  # Implements a cache of version ids based on version name
+  # If add_versions is true and a valid name is given,
+  # will create a new version and save it when it doesn't exist yet.
+  def version_id_for_name!(project,name,add_versions)
+    if !@version_id_by_name.has_key?(name)
+      version = Version.find_by_project_id_and_name(project.id, name)
+      if !version
+        if name && (name.length > 0) && add_versions
+          version = project.versions.build(:name=>name)
+          version.save
+        else
+          @unfound_class = "Version"
+          @unfound_key = name
+          raise ActiveRecord::RecordNotFound, "No version named #{name}"
+        end
+      end
+      @version_id_by_name[name] = version.id
+    end
+    @version_id_by_name[name]
+  end
+
   
 end
