@@ -43,7 +43,8 @@ class ImporterController < ApplicationController
     # users with two imports in progress
     @import_timestamp = iip.created.strftime("%Y-%m-%d %H:%M:%S")
     @original_filename = params[:file].original_filename
-    
+   
+    flash.delete(:error)
     validate_csv_data(iip.csv_data)
     return if flash[:error].present?
 
@@ -113,6 +114,7 @@ class ImporterController < ApplicationController
     unique_attr = fields_map[unique_field]
     unique_attr_checked = false  # Used to optimize some work that has to happen inside the loop   
 
+    use_issue_id = params[:use_issue_id].present? ? true : false
     # attrs_map is fields_map's invert
     attrs_map = fields_map.invert
 
@@ -134,6 +136,16 @@ class ImporterController < ApplicationController
       flash[:error] = unique_error
       return
     end
+
+
+    # validate that the id attribute has been selected
+    if use_issue_id
+      if attrs_map["id"].blank?
+        flash[:error] = "You must specify a column mapping for id when importing using provided issue ids."
+        return
+      end
+    end
+
 
     CSV.new(iip.csv_data, {:headers=>true,
                            :encoding=>iip.encoding,
@@ -169,6 +181,9 @@ class ImporterController < ApplicationController
         watchers = row[attrs_map["watchers"]]
         # new issue or find exists one
         issue = Issue.new
+        if use_issue_id
+          issue.id = row[attrs_map["id"]]
+        end
         journal = nil
         issue.project_id = project != nil ? project.id : @project.id
         issue.tracker_id = tracker != nil ? tracker.id : default_tracker
@@ -332,7 +347,14 @@ class ImporterController < ApplicationController
       end
       next if watcher_failed_count > 0
 
-      unless issue.save
+      begin
+        issue_saved = issue.save
+      rescue ActiveRecord::RecordNotUnique
+        issue_saved = false
+        @messages << "This issue id has already been taken."
+      end
+
+      unless issue_saved
         @failed_count += 1
         @failed_issues[@failed_count] = row
         @messages << "Warning: The following data-validation errors occurred on issue #{@failed_count} in the list below"
