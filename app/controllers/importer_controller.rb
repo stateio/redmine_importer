@@ -124,44 +124,38 @@ class ImporterController < ApplicationController
     # attrs_map is fields_map's invert
     attrs_map = fields_map.invert
 
-    # check params
-    unique_error = nil
-    if update_issue
-      unique_error = l(:text_rmi_specify_unique_field_for_update)
-    elsif attrs_map["parent_issue"] != nil
-      unique_error = l(:text_rmi_specify_unique_field_for_column,:column => l(:field_parent_issue))
-    else
-      IssueRelation::TYPES.each_key do |rtype|
-        if attrs_map[rtype]
-          unique_error = l(:text_rmi_specify_unique_field_for_column,:column => l("label_#{rtype}".to_sym))
-          break
+    # validation!
+    # if the unique_attr is blank but any of the following opts is turned on,
+    if unique_attr.blank?
+      if update_issue
+        flash[:error] = l(:text_rmi_specify_unique_field_for_update)
+      elsif attrs_map["parent_issue"].present?
+        flash[:error] = l(:text_rmi_specify_unique_field_for_column,:column => l(:field_parent_issue))
+      else IssueRelation::TYPES.each_key.any? { |t| attrs_map[t].present? }
+        IssueRelation::TYPES.each_key do |t|
+          if attrs_map[t].present?
+            flash[:error] = l(:text_rmi_specify_unique_field_for_column,:column => l("label_#{t}".to_sym))
+          end
         end
       end
     end
-    if unique_error && unique_attr == nil
-      flash[:error] = unique_error
-      return
-    end
-
-
+    
     # validate that the id attribute has been selected
     if use_issue_id
       if attrs_map["id"].blank?
         flash[:error] = "You must specify a column mapping for id when importing using provided issue ids."
-        return
       end
     end
 
+    # if error is full, NOP
+    return if flash[:error].present?
 
-    CSV.new(iip.csv_data, {:headers=>true,
-                           :encoding=>iip.encoding,
-                           :quote_char=>iip.quote_char,
-                           :col_sep=>iip.col_sep}).each do |row|
+
+    csv_opt = {:headers=>true, :encoding=>iip.encoding, :quote_char=>iip.quote_char, :col_sep=>iip.col_sep}
+    CSV.new(iip.csv_data, csv_opt).each do |row|
 
       project = Project.find_by_name(row[attrs_map["project"]])
-      if !project
-        project = @project
-      end
+      project ||= @project
 
       begin
         row.each do |k, v|
