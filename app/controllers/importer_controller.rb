@@ -86,6 +86,8 @@ class ImporterController < ApplicationController
     @user_by_login = Hash.new
     # Cache of Version by name
     @version_id_by_name = Hash.new
+    # Used to optimize some work that has to happen inside the loop   
+    unique_attr_checked = false  
     
     # Retrieve saved import data
     iip = ImportInProgress.find_by_user_id(User.current.id)
@@ -99,22 +101,25 @@ class ImporterController < ApplicationController
           "This import cannot be completed"
       return
     end
-    
-    default_tracker = params[:default_tracker]
+
+    # which options were turned on?
     update_issue = params[:update_issue]
-    unique_field = params[:unique_field].empty? ? nil : params[:unique_field]
-    journal_field = params[:journal_field]
     update_other_project = params[:update_other_project]
-    ignore_non_exist = params[:ignore_non_exist]
-    fields_map = {}
-    params[:fields_map].each { |k, v| fields_map[k.unpack('U*').pack('U*')] = v }
     send_emails = params[:send_emails]
     add_categories = params[:add_categories]
     add_versions = params[:add_versions]
-    unique_attr = fields_map[unique_field]
-    unique_attr_checked = false  # Used to optimize some work that has to happen inside the loop   
-
     use_issue_id = params[:use_issue_id].present? ? true : false
+    ignore_non_exist = params[:ignore_non_exist]
+
+    # which fields should we use? what maps to what?
+    fields_map = {}
+    params[:fields_map].each { |k, v| fields_map[k.unpack('U*').pack('U*')] = v }
+    unique_attr = fields_map[unique_field]
+
+    default_tracker = params[:default_tracker]
+    unique_field = params[:unique_field].empty? ? nil : params[:unique_field]
+    journal_field = params[:journal_field]
+    
     # attrs_map is fields_map's invert
     attrs_map = fields_map.invert
 
