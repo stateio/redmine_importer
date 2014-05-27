@@ -70,8 +70,11 @@ class ImporterController < ApplicationController
     @attrs.sort!
   end
   
-  
+   
   def result
+    # used for bookkeeping
+    flash.delete(:error)
+
     @handle_count = 0
     @update_count = 0
     @skip_count = 0
@@ -122,18 +125,18 @@ class ImporterController < ApplicationController
     journal_field = params[:journal_field]
     
     # attrs_map is fields_map's invert
-    attrs_map = fields_map.invert
+    @attrs_map = fields_map.invert
 
     # validation!
     # if the unique_attr is blank but any of the following opts is turned on,
     if unique_attr.blank?
       if update_issue
         flash[:error] = l(:text_rmi_specify_unique_field_for_update)
-      elsif attrs_map["parent_issue"].present?
+      elsif @attrs_map["parent_issue"].present?
         flash[:error] = l(:text_rmi_specify_unique_field_for_column,:column => l(:field_parent_issue))
-      else IssueRelation::TYPES.each_key.any? { |t| attrs_map[t].present? }
+      else IssueRelation::TYPES.each_key.any? { |t| @attrs_map[t].present? }
         IssueRelation::TYPES.each_key do |t|
-          if attrs_map[t].present?
+          if @attrs_map[t].present?
             flash[:error] = l(:text_rmi_specify_unique_field_for_column,:column => l("label_#{t}".to_sym))
           end
         end
@@ -142,7 +145,7 @@ class ImporterController < ApplicationController
     
     # validate that the id attribute has been selected
     if use_issue_id
-      if attrs_map["id"].blank?
+      if @attrs_map["id"].blank?
         flash[:error] = "You must specify a column mapping for id when importing using provided issue ids."
       end
     end
@@ -154,7 +157,7 @@ class ImporterController < ApplicationController
     csv_opt = {:headers=>true, :encoding=>iip.encoding, :quote_char=>iip.quote_char, :col_sep=>iip.col_sep}
     CSV.new(iip.csv_data, csv_opt).each do |row|
 
-      project = Project.find_by_name(row[attrs_map["project"]])
+      project = Project.find_by_name(fetch("project", row))
       project ||= @project
 
       begin
@@ -165,33 +168,45 @@ class ImporterController < ApplicationController
           row[k] = v
         end
 
-        tracker = Tracker.find_by_name(row[attrs_map["tracker"]])
-        status = IssueStatus.find_by_name(row[attrs_map["status"]])
-        author = attrs_map["author"] ? user_for_login!(row[attrs_map["author"]]) : User.current
-        priority = Enumeration.find_by_name(row[attrs_map["priority"]])
-        category_name = row[attrs_map["category"]]
+        issue = Issue.new
+
+        if use_issue_id
+          issue.id = fetch("id", row)
+        end
+
+        tracker = Tracker.find_by_name(fetch("tracker", row))
+        status = IssueStatus.find_by_name(fetch("status", row))
+        author = @attrs_map["author"] ? user_for_login!(fetch("author", row)) : User.current
+        priority = Enumeration.find_by_name(fetch("priority", row))
+        category_name = fetch("category", row)
         category = IssueCategory.find_by_project_id_and_name(project.id, category_name)
+        
         if (!category) && category_name && category_name.length > 0 && add_categories
           category = project.issue_categories.build(:name => category_name)
           category.save
         end
-        assigned_to = row[attrs_map["assigned_to"]] != nil ? user_for_login!(row[attrs_map["assigned_to"]]) : nil
-        fixed_version_name = row[attrs_map["fixed_version"]].blank? ? nil : row[attrs_map["fixed_version"]]
-        fixed_version_id = fixed_version_name ? version_id_for_name!(project,fixed_version_name,add_versions) : nil
-        watchers = row[attrs_map["watchers"]]
-        # new issue or find exists one
-        issue = Issue.new
-        if use_issue_id
-          issue.id = row[attrs_map["id"]]
+
+        if fetch("assigned_to", row).present?
+          assigned_to = user_for_login!(fetch("assigned_to", row))
+        else
+          assigned_to = nil
         end
-        journal = nil
+
+        if fetch("fixed_version", row).present?
+          fixed_version_name = fetch("fixed_version", row)
+          fixed_version_id = version_id_for_name!(project,fixed_version_name,add_versions)
+        else
+          fixed_version_name = nil
+          fixed_version_id = nil
+        end
+
+        watchers = fetch("watchers", row)
+
         issue.project_id = project != nil ? project.id : @project.id
         issue.tracker_id = tracker != nil ? tracker.id : default_tracker
         issue.author_id = author != nil ? author.id : User.current.id
       rescue ActiveRecord::RecordNotFound
-        @failed_count += 1
-        @failed_issues[@failed_count] = row
-        @messages << "Warning: When adding issue #{@failed_count} below, the #{@unfound_class} #{@unfound_key} was not found"
+        log_failure(row, "Warning: When adding issue #{@failed_count+1} below, the #{@unfound_class} #{@unfound_key} was not found")
         next
       end
 
@@ -238,45 +253,42 @@ class ImporterController < ApplicationController
             @skip_count += 1
             next
           else
-            @failed_count += 1
-            @failed_issues[@failed_count] = row
-            @messages << "Warning: Could not update issue #{@failed_count} below, no match for the value #{row[unique_field]} were found"
+            log_failure(row, "Warning: Could not update issue #{@failed_count+1} below, no match for the value #{row[unique_field]} were found")
             next
           end
           
         rescue MultipleIssuesForUniqueValue
-          @failed_count += 1
-          @failed_issues[@failed_count] = row
-          @messages << "Warning: Could not update issue #{@failed_count} below, multiple matches for the value #{row[unique_field]} were found"
+          log_failure("Warning: Could not update issue #{@failed_count+1} below, multiple matches for the value #{row[unique_field]} were found")
           next
         end
       end
     
-      # project affect
-      if project == nil
-        project = Project.find_by_id(issue.project_id)
-      end
+      project ||= Project.find_by_id(issue.project_id)
+
       @affect_projects_issues.has_key?(project.name) ?
         @affect_projects_issues[project.name] += 1 : @affect_projects_issues[project.name] = 1
 
       # required attributes
       issue.status_id = status != nil ? status.id : issue.status_id
       issue.priority_id = priority != nil ? priority.id : issue.priority_id
-      issue.subject = row[attrs_map["subject"]] || issue.subject
+      issue.subject = fetch("subject", row) || issue.subject
       
       # optional attributes
-      issue.description = row[attrs_map["description"]] || issue.description
+      issue.description = fetch("description", row) || issue.description
       issue.category_id = category != nil ? category.id : issue.category_id
-      issue.start_date = row[attrs_map["start_date"]].blank? ? nil : Date.parse(row[attrs_map["start_date"]])
-      issue.due_date = row[attrs_map["due_date"]].blank? ? nil : Date.parse(row[attrs_map["due_date"]])
+
+      if fetch("start_date", row).present?
+        issue.start_date = Date.parse(fetch("start_date", row))
+      end
+      issue.due_date = row[@attrs_map["due_date"]].blank? ? nil : Date.parse(row[@attrs_map["due_date"]])
       issue.assigned_to_id = assigned_to != nil ? assigned_to.id : issue.assigned_to_id
       issue.fixed_version_id = fixed_version_id != nil ? fixed_version_id : issue.fixed_version_id
-      issue.done_ratio = row[attrs_map["done_ratio"]] || issue.done_ratio
-      issue.estimated_hours = row[attrs_map["estimated_hours"]] || issue.estimated_hours
+      issue.done_ratio = row[@attrs_map["done_ratio"]] || issue.done_ratio
+      issue.estimated_hours = row[@attrs_map["estimated_hours"]] || issue.estimated_hours
 
       # parent issues
       begin
-        parent_value = row[attrs_map["parent_issue"]]
+        parent_value = row[@attrs_map["parent_issue"]]
         if parent_value && (parent_value.length > 0)
           issue.parent_issue_id = issue_for_unique_attr(unique_attr,parent_value,row).id
         end
@@ -299,7 +311,7 @@ class ImporterController < ApplicationController
       # custom fields
       custom_failed_count = 0
       issue.custom_field_values = issue.available_custom_fields.inject({}) do |h, cf|
-        if value = row[attrs_map[cf.name]].blank? ? nil : row[attrs_map[cf.name]]
+        if value = row[@attrs_map[cf.name]].blank? ? nil : row[@attrs_map[cf.name]]
           begin
             if cf.field_format == 'user'
               value = user_id_for_login!(value).to_s
@@ -381,10 +393,10 @@ class ImporterController < ApplicationController
         # Issue relations
         begin
           IssueRelation::TYPES.each_pair do |rtype, rinfo|
-            if !row[attrs_map[rtype]]
+            if !row[@attrs_map[rtype]]
               next
             end
-            other_issue = issue_for_unique_attr(unique_attr,row[attrs_map[rtype]],row)
+            other_issue = issue_for_unique_attr(unique_attr,row[@attrs_map[rtype]],row)
             relations = issue.relations.select { |r| (r.other_issue(issue).id == other_issue.id) && (r.relation_type_for(issue) == rtype) }
             if relations.length == 0
               relation = IssueRelation.new( :issue_from => issue, :issue_to => other_issue, :relation_type => rtype )
@@ -422,7 +434,17 @@ class ImporterController < ApplicationController
     ImportInProgress.delete_all(["created < ?",Time.new - 3*24*60*60])
   end
 
-private
+  private
+
+  def fetch(key, row)
+    row[@attrs_map[key]]
+  end
+
+  def log_failure(row, msg)
+    @failed_count += 1
+    @failed_issues[@failed_count] = row
+    @messages << msg
+  end
 
   def find_project
     @project = Project.find(params[:project_id])
