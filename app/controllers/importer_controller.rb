@@ -443,7 +443,7 @@ private
     if csv_data.lines.to_a.size <= 1
       flash[:error] = 'No data line in your CSV, check the encoding of the file<br/><br/>Header :<br/>'.html_safe + csv_data
 
-      redirect_to importer_index_path(:project_id => @project)
+      redirect_to project_importer_path(:project_id => @project)
 
       return
     end
@@ -478,7 +478,7 @@ private
 
       flash[:error] = error_message
 
-      redirect_to importer_index_path(:project_id => @project)
+      redirect_to project_importer_path(:project_id => @project)
 
       return
     end
@@ -501,7 +501,7 @@ private
       '<br/><br/>Header :<br/>'.html_safe +
         iip.csv_data.lines.to_a[0]
 
-      redirect_to importer_index_path(:project_id => @project)
+      redirect_to project_importer_path(:project_id => @project)
 
       return
     end
