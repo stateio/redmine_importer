@@ -112,12 +112,13 @@ class ImporterController < ApplicationController
     ignore_non_exist = params[:ignore_non_exist]
 
     # which fields should we use? what maps to what?
+    unique_field = params[:unique_field].empty? ? nil : params[:unique_field]
+
     fields_map = {}
     params[:fields_map].each { |k, v| fields_map[k.unpack('U*').pack('U*')] = v }
     unique_attr = fields_map[unique_field]
 
     default_tracker = params[:default_tracker]
-    unique_field = params[:unique_field].empty? ? nil : params[:unique_field]
     journal_field = params[:journal_field]
     
     # attrs_map is fields_map's invert
