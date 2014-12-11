@@ -1,45 +1,58 @@
 <% content_for :header_tags do %>
-    <%= stylesheet_link_tag 'importer', :plugin => 'redmine_importer' %>
+  <%= stylesheet_link_tag 'importer', :plugin => 'redmine_importer' %>
 <% end %>
 
 <h2><%= l(:label_import_result) %></h2>
-<p><%= l(:label_result_notice, :handle_count => @handle_count, :success_count => @handle_count) %></p>
-<p><%= l(:label_result_projects) %><br/>
-<% @affect_projects_issues.each do |project, count|%>
-<label class="tabular2"><%= project %>:</label><label class="tabular2"><%= l(:label_result_issues, count) %></label><br/>
-<% end %></p>
+
+<p><%= l(:label_result_notice,
+  :handle_count => @handle_count,
+  :success_count => @handle_count) %>
+</p>
+
+<p><%= l(:label_result_projects) %>
+  <br/>
+  <% @affect_projects_issues.each do |project, count|%>
+    <label class="tabular2"><%= project %>:</label>
+    <label class="tabular2"><%= l(:label_result_issues, count) %></label>
+    <br/>
+  <% end %>
+</p>
 
 <% if not @messages.empty? %>
-	<hr/>
-	<h3><%= l(:label_result_messages) %></h3>
-	<ul>
-	<% @messages.each do |m| %>
-		<li><%= m %></li>
-	<% end %>
-	</ul>
+  <hr/>
+  <h3><%= l(:label_result_messages) %></h3>
+  <ul>
+    <% @messages.each do |m| %>
+      <li><%= m %></li>
+    <% end %>
+  </ul>
 <% end %>
 
 <hr/>
 <% if @failed_count > 0 %>
-	<h3><%= l(:label_result_failed, @failed_count) %></h3>
-	<table class="list">
-		<thead><tr>
-			<th>#</th>
-			<% @headers.each do |column| %>
-			<th><%= column.unpack('U*').pack('U*')  %></th>
-			<% end %>
-		</tr></thead>
-		<tbody>
-		<% @failed_issues.each do |id, issue| -%>
-		<tr class="<%= cycle("odd", "even") %>">
-			<td><%= id %></td>
-			<% issue.each do |column| %>
-		<%- data = column[1] -%>
-		<%- data = data.unpack('U*').pack('U*') if data.is_a?(String) -%>
-			<%= content_tag 'td', data %>
-		<% end %>
-		</tr>
-		<% end %>
-		</tbody>
-	</table>
+  <h3><%= l(:label_result_failed, @failed_count) %></h3>
+  <table class="list">
+    <thead>
+      <tr>
+        <th>#</th>
+        <% @headers.each do |column| %>
+          <th><%= column.unpack('U*').pack('U*')  %></th>
+        <% end %>
+      </tr>
+    </thead>
+    <tbody>
+      <% @failed_issues.each do |id, issue| -%>
+        <tr class="<%= cycle("odd", "even") %>">
+          <td><%= id %></td>
+          <% issue.each do |column| %>
+            <%- data = column[1] -%>
+            <%- data = data.unpack('U*').pack('U*') if data.is_a?(String) -%>
+            <%= content_tag 'td', data %>
+          <% end %>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
 <% end %>
+
+

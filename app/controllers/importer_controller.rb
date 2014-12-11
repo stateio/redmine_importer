@@ -1,11 +1,8 @@
 require 'csv'
 require 'tempfile'
 
-class MultipleIssuesForUniqueValue < Exception
-end
-
-class NoIssueForUniqueValue < Exception
-end
+MultipleIssuesForUniqueValue = Class.new(Exception)
+NoIssueForUniqueValue = Class.new(Exception)
 
 class Journal < ActiveRecord::Base
   def empty?(*args)
@@ -15,18 +12,17 @@ end
 
 class ImporterController < ApplicationController
   unloadable
-  
+
   before_filter :find_project
 
   ISSUE_ATTRS = [:id, :subject, :assigned_to, :fixed_version,
-    :author, :description, :category, :priority, :tracker, :status,
-    :start_date, :due_date, :done_ratio, :estimated_hours,
-    :parent_issue, :watchers ]
-  
-  def index
-  end
+                 :author, :description, :category, :priority, :tracker, :status,
+                 :start_date, :due_date, :done_ratio, :estimated_hours,
+                 :parent_issue, :watchers ]
 
-  
+  def index; end
+
+
   def match
     # Delete existing iip to ensure there can't be two iips for a user
     ImportInProgress.delete_all(["user_id = ?",User.current.id])
@@ -36,14 +32,14 @@ class ImporterController < ApplicationController
     iip.col_sep = params[:splitter]
     iip.encoding = params[:encoding]
     iip.created = Time.new
-    iip.csv_data = params[:file].read
+    iip.csv_data = params[:file].read unless params[:file].blank?
     iip.save
-    
+
     # Put the timestamp in the params to detect
     # users with two imports in progress
     @import_timestamp = iip.created.strftime("%Y-%m-%d %H:%M:%S")
     @original_filename = params[:file].original_filename
-   
+
     flash.delete(:error)
     validate_csv_data(iip.csv_data)
     return if flash[:error].present?
@@ -53,8 +49,8 @@ class ImporterController < ApplicationController
 
     set_csv_headers(iip)
     return if flash[:error].present?
-      
-    
+
+
     # fields
     @attrs = Array.new
     ISSUE_ATTRS.each do |attr|
@@ -69,8 +65,8 @@ class ImporterController < ApplicationController
     end
     @attrs.sort!
   end
-  
-   
+
+
   def result
     # used for bookkeeping
     flash.delete(:error)
@@ -89,9 +85,9 @@ class ImporterController < ApplicationController
     @user_by_login = Hash.new
     # Cache of Version by name
     @version_id_by_name = Hash.new
-    # Used to optimize some work that has to happen inside the loop   
-    unique_attr_checked = false  
-    
+    # Used to optimize some work that has to happen inside the loop
+    unique_attr_checked = false
+
     # Retrieve saved import data
     iip = ImportInProgress.find_by_user_id(User.current.id)
     if iip == nil
@@ -100,8 +96,8 @@ class ImporterController < ApplicationController
     end
     if iip.created.strftime("%Y-%m-%d %H:%M:%S") != params[:import_timestamp]
       flash[:error] = "You seem to have started another import " \
-          "since starting this one. " \
-          "This import cannot be completed"
+        "since starting this one. " \
+        "This import cannot be completed"
       return
     end
 
@@ -123,7 +119,7 @@ class ImporterController < ApplicationController
 
     default_tracker = params[:default_tracker]
     journal_field = params[:journal_field]
-    
+
     # attrs_map is fields_map's invert
     @attrs_map = fields_map.invert
 
@@ -133,20 +129,23 @@ class ImporterController < ApplicationController
       if update_issue
         flash[:error] = l(:text_rmi_specify_unique_field_for_update)
       elsif @attrs_map["parent_issue"].present?
-        flash[:error] = l(:text_rmi_specify_unique_field_for_column,:column => l(:field_parent_issue))
+        flash[:error] = l(:text_rmi_specify_unique_field_for_column,
+                          :column => l(:field_parent_issue))
       else IssueRelation::TYPES.each_key.any? { |t| @attrs_map[t].present? }
         IssueRelation::TYPES.each_key do |t|
           if @attrs_map[t].present?
-            flash[:error] = l(:text_rmi_specify_unique_field_for_column,:column => l("label_#{t}".to_sym))
+            flash[:error] = l(:text_rmi_specify_unique_field_for_column,
+                              :column => l("label_#{t}".to_sym))
           end
         end
       end
     end
-    
+
     # validate that the id attribute has been selected
     if use_issue_id
       if @attrs_map["id"].blank?
-        flash[:error] = "You must specify a column mapping for id when importing using provided issue ids."
+        flash[:error] = "You must specify a column mapping for id" \
+          " when importing using provided issue ids."
       end
     end
 
@@ -154,7 +153,10 @@ class ImporterController < ApplicationController
     return if flash[:error].present?
 
 
-    csv_opt = {:headers=>true, :encoding=>iip.encoding, :quote_char=>iip.quote_char, :col_sep=>iip.col_sep}
+    csv_opt = {:headers=>true,
+               :encoding=>iip.encoding,
+               :quote_char=>iip.quote_char,
+               :col_sep=>iip.col_sep}
     CSV.new(iip.csv_data, csv_opt).each do |row|
 
       project = Project.find_by_name(fetch("project", row))
@@ -176,12 +178,20 @@ class ImporterController < ApplicationController
 
         tracker = Tracker.find_by_name(fetch("tracker", row))
         status = IssueStatus.find_by_name(fetch("status", row))
-        author = @attrs_map["author"] ? user_for_login!(fetch("author", row)) : User.current
+        author = if @attrs_map["author"]
+                   user_for_login!(fetch("author", row))
+                 else
+                   User.current
+                 end
         priority = Enumeration.find_by_name(fetch("priority", row))
         category_name = fetch("category", row)
-        category = IssueCategory.find_by_project_id_and_name(project.id, category_name)
-        
-        if (!category) && category_name && category_name.length > 0 && add_categories
+        category = IssueCategory.find_by_project_id_and_name(project.id,
+                                                             category_name)
+
+        if (!category) \
+          && category_name && category_name.length > 0 \
+          && add_categories
+
           category = project.issue_categories.build(:name => category_name)
           category.save
         end
@@ -194,7 +204,9 @@ class ImporterController < ApplicationController
 
         if fetch("fixed_version", row).present?
           fixed_version_name = fetch("fixed_version", row)
-          fixed_version_id = version_id_for_name!(project,fixed_version_name,add_versions)
+          fixed_version_id = version_id_for_name!(project,
+                                                  fixed_version_name,
+                                                  add_versions)
         else
           fixed_version_name = nil
           fixed_version_id = nil
@@ -206,7 +218,8 @@ class ImporterController < ApplicationController
         issue.tracker_id = tracker != nil ? tracker.id : default_tracker
         issue.author_id = author != nil ? author.id : User.current.id
       rescue ActiveRecord::RecordNotFound
-        log_failure(row, "Warning: When adding issue #{@failed_count+1} below, the #{@unfound_class} #{@unfound_key} was not found")
+        log_failure(row, "Warning: When adding issue #{@failed_count+1} below," \
+                    " the #{@unfound_class} #{@unfound_key} was not found")
         next
       end
 
@@ -226,13 +239,13 @@ class ImporterController < ApplicationController
       if update_issue
         begin
           issue = issue_for_unique_attr(unique_attr,row[unique_field],row)
-          
+
           # ignore other project's issue or not
           if issue.project_id != @project.id && !update_other_project
             @skip_count += 1
             next
           end
-          
+
           # ignore closed issue except reopen
           if issue.status.is_closed?
             if status == nil || status.is_closed?
@@ -240,39 +253,45 @@ class ImporterController < ApplicationController
               next
             end
           end
-          
+
           # init journal
           note = row[journal_field] || ''
-          journal = issue.init_journal(author || User.current, 
-            note || '')
-            
+          journal = issue.init_journal(author || User.current,
+                                       note || '')
+
           @update_count += 1
-          
+
         rescue NoIssueForUniqueValue
           if ignore_non_exist
             @skip_count += 1
             next
           else
-            log_failure(row, "Warning: Could not update issue #{@failed_count+1} below, no match for the value #{row[unique_field]} were found")
+            log_failure(row,
+                        "Warning: Could not update issue #{@failed_count+1} below," \
+                        " no match for the value #{row[unique_field]} were found")
             next
           end
-          
+
         rescue MultipleIssuesForUniqueValue
-          log_failure("Warning: Could not update issue #{@failed_count+1} below, multiple matches for the value #{row[unique_field]} were found")
+          log_failure("Warning: Could not update issue #{@failed_count+1} below," \
+                      " multiple matches for the value #{row[unique_field]} were found")
           next
         end
       end
-    
+
       project ||= Project.find_by_id(issue.project_id)
 
-      @affect_projects_issues.has_key?(project.name) ?
-        @affect_projects_issues[project.name] += 1 : @affect_projects_issues[project.name] = 1
+      if @affect_projects_issues.has_key?(project.name)
+        @affect_projects_issues[project.name] += 1
+      else
+        @affect_projects_issues[project.name] = 1
+      end
 
       # required attributes
       issue.status_id = status != nil ? status.id : issue.status_id
       issue.priority_id = priority != nil ? priority.id : issue.priority_id
       issue.subject = fetch("subject", row) || issue.subject
-      
+
       # optional attributes
       issue.description = fetch("description", row) || issue.description
       issue.category_id = category != nil ? category.id : issue.category_id
@@ -280,9 +299,13 @@ class ImporterController < ApplicationController
       if fetch("start_date", row).present?
         issue.start_date = Date.parse(fetch("start_date", row))
       end
-      issue.due_date = row[@attrs_map["due_date"]].blank? ? nil : Date.parse(row[@attrs_map["due_date"]])
-      issue.assigned_to_id = assigned_to != nil ? assigned_to.id : issue.assigned_to_id
-      issue.fixed_version_id = fixed_version_id != nil ? fixed_version_id : issue.fixed_version_id
+      issue.due_date = if row[@attrs_map["due_date"]].blank?
+                         nil
+                       else
+                         Date.parse(row[@attrs_map["due_date"]])
+                       end
+      issue.assigned_to_id = assigned_to.id if assigned_to
+      issue.fixed_version_id = fixed_version_id if fixed_version_id
       issue.done_ratio = row[@attrs_map["done_ratio"]] || issue.done_ratio
       issue.estimated_hours = row[@attrs_map["estimated_hours"]] || issue.estimated_hours
 
@@ -298,28 +321,34 @@ class ImporterController < ApplicationController
         else
           @failed_count += 1
           @failed_issues[@failed_count] = row
-          @messages << "Warning: When setting the parent for issue #{@failed_count} below, no matches for the value #{parent_value} were found"
+          @messages << "Warning: When setting the parent for issue #{@failed_count} below,"\
+            " no matches for the value #{parent_value} were found"
           next
         end
       rescue MultipleIssuesForUniqueValue
         @failed_count += 1
         @failed_issues[@failed_count] = row
-        @messages << "Warning: When setting the parent for issue #{@failed_count} below, multiple matches for the value #{parent_value} were found"
+        @messages << "Warning: When setting the parent for issue #{@failed_count} below," \
+          " multiple matches for the value #{parent_value} were found"
         next
       end
 
       # custom fields
       custom_failed_count = 0
       issue.custom_field_values = issue.available_custom_fields.inject({}) do |h, cf|
-        if value = row[@attrs_map[cf.name]].blank? ? nil : row[@attrs_map[cf.name]]
+        value = row[@attrs_map[cf.name]]
+        unless value.blank?
           begin
-            if cf.field_format == 'user'
-              value = user_id_for_login!(value).to_s
-            elsif cf.field_format == 'version'
-              value = version_id_for_name!(project,value,add_versions).to_s
-            elsif cf.field_format == 'date'
-              value = value.to_date.to_s(:db)
-            end
+            value = case cf.field_format
+                    when 'user'
+                      user_id_for_login!(value).to_s
+                    when 'version'
+                      version_id_for_name!(project,value,add_versions).to_s
+                    when 'date'
+                      value.to_date.to_s(:db)
+                    else
+                      value
+                    end
             h[cf.id] = value
           rescue
             if custom_failed_count == 0
@@ -327,13 +356,14 @@ class ImporterController < ApplicationController
               @failed_count += 1
               @failed_issues[@failed_count] = row
             end
-            @messages << "Warning: When trying to set custom field #{cf.name} on issue #{@failed_count} below, value #{value} was invalid"
+            @messages << "Warning: When trying to set custom field #{cf.name}" \
+              " on issue #{@failed_count} below, value #{value} was invalid"
           end
         end
         h
       end
       next if custom_failed_count > 0
-      
+
       # watchers
       watcher_failed_count = 0
       if watchers
@@ -353,7 +383,8 @@ class ImporterController < ApplicationController
               @failed_issues[@failed_count] = row
             end
             watcher_failed_count += 1
-            @messages << "Warning: When trying to add watchers on issue #{@failed_count} below, User #{watcher} was not found"
+            @messages << "Warning: When trying to add watchers on issue" \
+              " #{@failed_count} below, User #{watcher} was not found"
           end
         end
       end
@@ -369,7 +400,8 @@ class ImporterController < ApplicationController
       unless issue_saved
         @failed_count += 1
         @failed_issues[@failed_count] = row
-        @messages << "Warning: The following data-validation errors occurred on issue #{@failed_count} in the list below"
+        @messages << "Warning: The following data-validation errors occurred" \
+          " on issue #{@failed_count} in the list below"
         issue.errors.each do |attr, error_message|
           @messages << "Error: #{attr} #{error_message}"
         end
@@ -377,10 +409,12 @@ class ImporterController < ApplicationController
         if unique_field
           @issue_by_unique_attr[row[unique_field]] = issue
         end
-        
+
         if send_emails
           if update_issue
-            if Setting.notified_events.include?('issue_updated') && (!issue.current_journal.empty?)
+            if Setting.notified_events.include?('issue_updated') \
+              && (!issue.current_journal.empty?)
+
               Mailer.deliver_issue_edit(issue.current_journal)
             end
           else
@@ -396,10 +430,17 @@ class ImporterController < ApplicationController
             if !row[@attrs_map[rtype]]
               next
             end
-            other_issue = issue_for_unique_attr(unique_attr,row[@attrs_map[rtype]],row)
-            relations = issue.relations.select { |r| (r.other_issue(issue).id == other_issue.id) && (r.relation_type_for(issue) == rtype) }
+            other_issue = issue_for_unique_attr(unique_attr,
+                                                row[@attrs_map[rtype]],
+                                                row)
+            relations = issue.relations.select do |r|
+              (r.other_issue(issue).id == other_issue.id) \
+                && (r.relation_type_for(issue) == rtype)
+            end
             if relations.length == 0
-              relation = IssueRelation.new( :issue_from => issue, :issue_to => other_issue, :relation_type => rtype )
+              relation = IssueRelation.new(:issue_from => issue,
+                                           :issue_to => other_issue,
+                                           :relation_type => rtype)
               relation.save
             end
           end
@@ -415,21 +456,21 @@ class ImporterController < ApplicationController
         if journal
           journal
         end
-        
+
         @handle_count += 1
 
       end
-  
+
     end # do
-    
+
     if @failed_issues.size > 0
       @failed_issues = @failed_issues.sort
       @headers = @failed_issues[0][1].headers
     end
-    
+
     # Clean up after ourselves
     iip.delete
-    
+
     # Garbage prevention: clean up iips older than 3 days
     ImportInProgress.delete_all(["created < ?",Time.new - 3*24*60*60])
   end
@@ -457,7 +498,8 @@ class ImporterController < ApplicationController
 
   def validate_csv_data(csv_data)
     if csv_data.lines.to_a.size <= 1
-      flash[:error] = 'No data line in your CSV, check the encoding of the file<br/><br/>Header :<br/>'.html_safe + csv_data
+      flash[:error] = 'No data line in your CSV, check the encoding of the file'\
+        '<br/><br/>Header :<br/>'.html_safe + csv_data
 
       redirect_to project_importer_path(:project_id => @project)
 
@@ -513,9 +555,9 @@ class ImporterController < ApplicationController
     }
 
     if missing_header_columns.present?
-      flash[:error] = 'Column header missing : ' + missing_header_columns + " / #{@headers.size}" +
-      '<br/><br/>Header :<br/>'.html_safe +
-        iip.csv_data.lines.to_a[0]
+      flash[:error] = "Column header missing : #{missing_header_columns}" \
+      " / #{@headers.size} #{'<br/><br/>Header :<br/>'.html_safe}" \
+      " #{iip.csv_data.lines.to_a[0]}"
 
       redirect_to project_importer_path(:project_id => @project)
 
@@ -546,16 +588,22 @@ class ImporterController < ApplicationController
       query = query_class.new(:name => "_importer", :project => @project)
       query.add_filter("status_id", "*", [1])
       query.add_filter(unique_attr, "=", [attr_value])
-      
-      issues = Issue.find :all, :conditions => query.statement, :limit => 2, :include => [ :assigned_to, :status, :tracker, :project, :priority, :category, :fixed_version ]
+
+      issues = Issue.find :all,
+        :conditions => query.statement,
+        :limit => 2,
+        :include => [ :assigned_to, :status, :tracker, :project, :priority,
+                      :category, :fixed_version ]
     end
-    
+
     if issues.size > 1
       @failed_count += 1
       @failed_issues[@failed_count] = row_data
-      @messages << "Warning: Unique field #{unique_attr} with value '#{attr_value}' in issue #{@failed_count} has duplicate record"
-      raise MultipleIssuesForUniqueValue, "Unique field #{unique_attr} with value '#{attr_value}' has duplicate record"
-      else
+      @messages << "Warning: Unique field #{unique_attr} with value " \
+        "'#{attr_value}' in issue #{@failed_count} has duplicate record"
+      raise MultipleIssuesForUniqueValue, "Unique field #{unique_attr} with" \
+        " value '#{attr_value}' has duplicate record"
+    else
       if issues.size == 0
         raise NoIssueForUniqueValue, "No issue with #{unique_attr} of '#{attr_value}' found"
       end
@@ -585,8 +633,8 @@ class ImporterController < ApplicationController
     user = user_for_login!(login)
     user ? user.id : nil
   end
-    
-  
+
+
   # Returns the id for the given version or raises RecordNotFound.
   # Implements a cache of version ids based on version name
   # If add_versions is true and a valid name is given,
@@ -609,5 +657,4 @@ class ImporterController < ApplicationController
     @version_id_by_name[name]
   end
 
-  
 end
