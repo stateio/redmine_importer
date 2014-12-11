@@ -11,5 +11,5 @@ Redmine::Plugin.register :redmine_importer do
   project_module :importer do
     permission :import, :importer => :index
   end
-  menu :project_menu, :importer, { :controller => 'importer', :action => 'index' }, :caption => :label_import, :before => :settings, :param => :project_id, :if => Proc.new { User.current.admin? }
+  menu :project_menu, :importer, { :controller => 'importer', :action => 'index' }, :caption => :label_import, :before => :settings, :param => :project_id
 end

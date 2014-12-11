@@ -16,7 +16,7 @@ end
 class ImporterController < ApplicationController
   unloadable
   
-  before_filter :find_project, :assert_admin
+  before_filter :find_project
 
   ISSUE_ATTRS = [:id, :subject, :assigned_to, :fixed_version,
     :author, :description, :category, :priority, :tracker, :status,
@@ -448,12 +448,6 @@ class ImporterController < ApplicationController
 
   def find_project
     @project = Project.find(params[:project_id])
-  end
-
-  def assert_admin
-    unless User.current.admin?
-      redirect_to @project
-    end
   end
 
   def flash_message(type, text)
