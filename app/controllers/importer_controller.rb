@@ -340,7 +340,6 @@ class ImporterController < ApplicationController
         unless value.blank?
           if cf.multiple
             h[cf.id] = process_multivalue_custom_field(issue, cf, value)
-            raise h[cf.id].to_yaml
           else
             begin
               value = case cf.field_format
@@ -428,7 +427,7 @@ class ImporterController < ApplicationController
             end
           end
         end
-
+        
         # Issue relations
         begin
           IssueRelation::TYPES.each_pair do |rtype, rinfo|
@@ -660,6 +659,17 @@ class ImporterController < ApplicationController
       @version_id_by_name[name] = version.id
     end
     @version_id_by_name[name]
+  end
+
+  def process_multivalue_custom_field(issue, custom_field, csv_val)
+    csv_val.split(',').map(&:strip).map do |val|
+      if custom_field.field_format == 'version'
+        version = Version.find_by_name val
+        version.id
+      else
+        val
+      end
+    end
   end
 
 end
