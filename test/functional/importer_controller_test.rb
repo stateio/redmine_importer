@@ -3,7 +3,7 @@ require File.expand_path('../../test_helper', __FILE__)
 class ImporterControllerTest < ActionController::TestCase
   def setup
     @project = Project.create! :name => 'foo'
-    @tracker = @project.trackers.create(:name => 'Approval')
+    @tracker = @project.trackers.create(:name => 'Defect')
     @role = Role.create! :name => 'ADMIN', :permissions => [:import]
     @user = create_user!(@role, @project)
     @iip = create_iip_for_multivalues!(@user, @project)
@@ -32,8 +32,7 @@ class ImporterControllerTest < ActionController::TestCase
   test 'should create issue if none exists' do
     Issue.delete_all
     assert_equal 0, Issue.count
-    post :result, build_params(:update_issue => nil,
-                               :fields_map => {'Subject' => 'subject'})
+    post :result, build_params(:update_issue => nil)
     assert_response :success
     assert_equal 1, Issue.count
     issue = Issue.first
@@ -52,7 +51,10 @@ class ImporterControllerTest < ActionController::TestCase
         '#' => 'id',
         'Subject' => 'subject',
         'Tags' => 'Tags',
-        'Affected versions' => 'Affected versions'
+        'Affected versions' => 'Affected versions',
+        'Priority' => 'priority',
+        'Tracker' => 'tracker',
+        'Status' => 'status'
       }
     )
   end
@@ -101,10 +103,10 @@ class ImporterControllerTest < ActionController::TestCase
     issue.id = 70385
     issue.project = project
     issue.subject = 'foobar'
-    issue.create_priority!(name: 'top')
+    issue.create_priority!(name: 'Critical')
     issue.tracker = project.trackers.first
     issue.author = author
-    issue.create_status!(name: 'open')
+    issue.create_status!(name: 'New')
     issue.save!
     issue
   end
