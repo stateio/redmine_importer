@@ -10,32 +10,52 @@ class ImporterControllerTest < ActionController::TestCase
     @issue = create_issue!(@project, @user)
     create_custom_fields!(@issue)
     create_versions!(@project)
+    User.stubs(:current).returns(@user)
   end
 
-  # def teardown
-  #   [Project, Tracker, Role, User, ImportInProgress, Issue, Member,
-  #    IssueStatus, IssuePriority].each(&:delete_all)
-  # end
+  test 'should handle multi-value fields' do
+    assert_equal 'foobar', @issue.subject
+    post :result, build_params
+    assert_response :success
+    @issue.reload
+    assert_issue_has_affected_versions(@issue, ['Admin', '2013-09-25'])
+  end
 
-  test 'should handle multiple-values in a single field' do
-    User.stubs(:current).returns(@user)
-    params = {
+  test 'should handle single-value fields' do
+    assert_equal 'foobar', @issue.subject
+    post :result, build_params
+    assert_response :success
+    @issue.reload
+    assert_equal 'Not able to update any issue for HTC Accord MR', @issue.subject
+  end
+
+  test 'should create issue if none exists' do
+    Issue.delete_all
+    assert_equal 0, Issue.count
+    post :result, build_params(:update_issue => nil,
+                               :fields_map => {'Subject' => 'subject'})
+    assert_response :success
+    assert_equal 1, Issue.count
+    issue = Issue.first
+    assert_equal 'Not able to update any issue for HTC Accord MR', issue.subject
+  end
+
+  protected
+
+  def build_params(opts={})
+    opts.reverse_merge(
       :import_timestamp => @iip.created.strftime("%Y-%m-%d %H:%M:%S"),
-      :update_issue => 'unique',
+      :update_issue => 'true',
       :unique_field => '#',
       :project_id => @project.id,
       :fields_map => {
         '#' => 'id',
+        'Subject' => 'subject',
         'Tags' => 'Tags',
         'Affected versions' => 'Affected versions'
       }
-    }
-    post :result, params
-    assert_response :success
-    assert_issue_has_affected_versions(@issue, ['Admin', '2013-09-25'])
+    )
   end
-
-  protected
 
   def assert_issue_has_affected_versions(issue, version_names)
     version_ids = version_names.map do |name|
