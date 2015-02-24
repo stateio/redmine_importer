@@ -14,7 +14,6 @@ class ImporterControllerTest < ActionController::TestCase
   end
 
   test 'should handle multi-value fields' do
-    assert_equal 'foobar', @issue.subject
     post :result, build_params
     assert_response :success
     @issue.reload
@@ -26,7 +25,7 @@ class ImporterControllerTest < ActionController::TestCase
     post :result, build_params
     assert_response :success
     @issue.reload
-    assert_equal 'Not able to update any issue for HTC Accord MR', @issue.subject
+    assert_equal 'barfooz', @issue.subject
   end
 
   test 'should create issue if none exists' do
@@ -36,7 +35,7 @@ class ImporterControllerTest < ActionController::TestCase
     assert_response :success
     assert_equal 1, Issue.count
     issue = Issue.first
-    assert_equal 'Not able to update any issue for HTC Accord MR', issue.subject
+    assert_equal 'barfooz', issue.subject
   end
 
   protected
