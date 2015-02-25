@@ -14,19 +14,20 @@ class ImporterControllerTest < ActionController::TestCase
   end
 
   test 'should handle multiple values for versions' do
-    refute issue_has_affected_versions?(@issue, ['Admin', '2013-09-25'])
+    assert issue_has_none_of_these_affected_versions?(@issue,
+                                                      ['Admin', '2013-09-25'])
     post :result, build_params
     assert_response :success
     @issue.reload
-    assert issue_has_affected_versions?(@issue, ['Admin', '2013-09-25'])
+    assert issue_has_all_these_affected_versions?(@issue, ['Admin', '2013-09-25'])
   end
 
   test 'should handle multiple values for tags' do
-    refute issue_has_tags?(@issue, ['tag1', 'tag2'])
+    assert issue_has_none_of_these_tags?(@issue, ['tag1', 'tag2'])
     post :result, build_params
     assert_response :success
     @issue.reload
-    assert issue_has_tags?(@issue, ['tag1', 'tag2'])
+    assert issue_has_all_these_tags?(@issue, ['tag1', 'tag2'])
   end
 
   test 'should handle single-value fields' do
@@ -67,19 +68,38 @@ class ImporterControllerTest < ActionController::TestCase
     )
   end
   
-  def issue_has_affected_versions?(issue, version_names)
+  def issue_has_all_these_affected_versions?(issue, version_names)
     version_ids = version_names.map do |name|
       Version.find_by_name!(name).id.to_s
     end
     versions_field = CustomField.find_by_name! 'Affected versions'
-    values = issue.custom_values.find_all_by_custom_field_id versions_field.id
-    values.any? {|v| version_ids.include?(v.value) }
+    value_objs = issue.custom_values.find_all_by_custom_field_id versions_field.id
+    values = value_objs.map(&:value)
+    version_ids.all? {|id| values.include?(id) }
   end
   
-  def issue_has_tags?(issue, tags)
+  def issue_has_none_of_these_affected_versions?(issue, version_names)
+    version_ids = version_names.map do |name|
+      Version.find_by_name!(name).id.to_s
+    end
+    versions_field = CustomField.find_by_name! 'Affected versions'
+    value_objs = issue.custom_values.find_all_by_custom_field_id versions_field.id
+    values = value_objs.map(&:value)
+    version_ids.none? {|id| values.include?(id) }
+  end
+  
+  def issue_has_all_these_tags?(issue, tags)
     tags_field = CustomField.find_by_name! 'Tags'
-    values = issue.custom_values.find_all_by_custom_field_id tags_field.id
-    values.any? {|v| tags.include?(v.value) }
+    value_objs = issue.custom_values.find_all_by_custom_field_id(tags_field.id)
+    values = value_objs.map(&:value)
+    tags.all? {|tag| values.include?(tag) }
+  end
+  
+  def issue_has_none_of_these_tags?(issue, tags)
+    tags_field = CustomField.find_by_name! 'Tags'
+    value_objs = issue.custom_values.find_all_by_custom_field_id(tags_field.id)
+    values = value_objs.map(&:value)
+    tags.none? {|tag| values.include?(tag) }
   end
 
   def create_user!(role, project)
