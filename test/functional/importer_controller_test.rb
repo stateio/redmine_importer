@@ -69,37 +69,45 @@ class ImporterControllerTest < ActionController::TestCase
   end
   
   def issue_has_all_these_affected_versions?(issue, version_names)
-    version_ids = version_names.map do |name|
-      Version.find_by_name!(name).id.to_s
+    find_version_ids(version_names).all? do |version_to_find|
+      versions_for(issue).include?(version_to_find)
     end
-    versions_field = CustomField.find_by_name! 'Affected versions'
-    value_objs = issue.custom_values.find_all_by_custom_field_id versions_field.id
-    values = value_objs.map(&:value)
-    version_ids.all? {|id| values.include?(id) }
   end
   
   def issue_has_none_of_these_affected_versions?(issue, version_names)
-    version_ids = version_names.map do |name|
+    find_version_ids(version_names).none? do |version_to_find|
+      versions_for(issue).include?(version_to_find)
+    end
+  end
+
+  def find_version_ids(version_names)
+    version_names.map do |name|
       Version.find_by_name!(name).id.to_s
     end
+  end
+
+  def versions_for(issue)
     versions_field = CustomField.find_by_name! 'Affected versions'
     value_objs = issue.custom_values.find_all_by_custom_field_id versions_field.id
     values = value_objs.map(&:value)
-    version_ids.none? {|id| values.include?(id) }
   end
   
-  def issue_has_all_these_tags?(issue, tags)
+  def issue_has_all_these_tags?(issue, tags_to_find)
+    tags_to_find.all? do |tag_to_find|
+      tags_for(issue).include?(tag_to_find)
+    end
+  end
+  
+  def issue_has_none_of_these_tags?(issue, tags_to_find)
+    tags_to_find.none? do |tag_to_find|
+      tags_for(issue).include?(tag_to_find)
+    end
+  end
+
+  def tags_for(issue)
     tags_field = CustomField.find_by_name! 'Tags'
     value_objs = issue.custom_values.find_all_by_custom_field_id(tags_field.id)
     values = value_objs.map(&:value)
-    tags.all? {|tag| values.include?(tag) }
-  end
-  
-  def issue_has_none_of_these_tags?(issue, tags)
-    tags_field = CustomField.find_by_name! 'Tags'
-    value_objs = issue.custom_values.find_all_by_custom_field_id(tags_field.id)
-    values = value_objs.map(&:value)
-    tags.none? {|tag| values.include?(tag) }
   end
 
   def create_user!(role, project)
