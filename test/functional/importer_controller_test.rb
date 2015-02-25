@@ -13,11 +13,20 @@ class ImporterControllerTest < ActionController::TestCase
     User.stubs(:current).returns(@user)
   end
 
-  test 'should handle multi-value fields' do
+  test 'should handle multiple values for versions' do
+    refute issue_has_affected_versions?(@issue, ['Admin', '2013-09-25'])
     post :result, build_params
     assert_response :success
     @issue.reload
-    assert_issue_has_affected_versions(@issue, ['Admin', '2013-09-25'])
+    assert issue_has_affected_versions?(@issue, ['Admin', '2013-09-25'])
+  end
+
+  test 'should handle multiple values for tags' do
+    refute issue_has_tags?(@issue, ['tag1', 'tag2'])
+    post :result, build_params
+    assert_response :success
+    @issue.reload
+    assert issue_has_tags?(@issue, ['tag1', 'tag2'])
   end
 
   test 'should handle single-value fields' do
@@ -57,21 +66,27 @@ class ImporterControllerTest < ActionController::TestCase
       }
     )
   end
-
-  def assert_issue_has_affected_versions(issue, version_names)
+  
+  def issue_has_affected_versions?(issue, version_names)
     version_ids = version_names.map do |name|
       Version.find_by_name!(name).id.to_s
     end
     versions_field = CustomField.find_by_name! 'Affected versions'
     values = issue.custom_values.find_all_by_custom_field_id versions_field.id
-    assert values.any? {|v| version_ids.include?(v.value) }
+    values.any? {|v| version_ids.include?(v.value) }
+  end
+  
+  def issue_has_tags?(issue, tags)
+    tags_field = CustomField.find_by_name! 'Tags'
+    values = issue.custom_values.find_all_by_custom_field_id tags_field.id
+    values.any? {|v| tags.include?(v.value) }
   end
 
   def create_user!(role, project)
     user = User.new :admin => true,
                      :firstname => 'Bob',
                      :lastname => 'Loblaw',
-                     :mail => 'bob.loblaw@law.blog'
+                     :mail => 'bob.loblaw@example.com'
     user.login = 'bob'
     membership = user.memberships.build(:project => project)
     membership.roles << role
@@ -111,12 +126,25 @@ class ImporterControllerTest < ActionController::TestCase
   end
 
   def create_custom_fields!(issue)
-    field = IssueCustomField.new :name => 'Affected versions', :multiple => true
-    field.field_format = 'version'
-    field.projects << issue.project
-    field.save!
-    issue.tracker.custom_fields << field
+    versions_field = create_multivalue_field!('Affected versions',
+                                              'version',
+                                              issue.project)
+    tags_field =     create_multivalue_field!('Tags',
+                                              'list',
+                                              issue.project,
+                                              %w(tag1 tag2))
+    issue.tracker.custom_fields << versions_field
+    issue.tracker.custom_fields << tags_field
     issue.tracker.save!
+  end
+
+  def create_multivalue_field!(name, format, project, possible_vals = [])
+    field = IssueCustomField.new :name => name, :multiple => true
+    field.field_format = format
+    field.projects << project
+    field.possible_values = possible_vals if possible_vals
+    field.save!
+    field
   end
 
   def create_versions!(project)
