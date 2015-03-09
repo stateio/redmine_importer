@@ -258,7 +258,7 @@ class ImporterController < ApplicationController
           note = row[journal_field] || ''
           journal = issue.init_journal(author || User.current,
                                        note || '')
-          journal.notify = false
+          journal.notify = false #disable journal's notification to use custom one down below
           @update_count += 1
 
         rescue NoIssueForUniqueValue
