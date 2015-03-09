@@ -258,7 +258,7 @@ class ImporterController < ApplicationController
           note = row[journal_field] || ''
           journal = issue.init_journal(author || User.current,
                                        note || '')
-
+          journal.notify = false
           @update_count += 1
 
         rescue NoIssueForUniqueValue
@@ -413,8 +413,8 @@ class ImporterController < ApplicationController
         if send_emails
           if update_issue
             if Setting.notified_events.include?('issue_updated') \
-              && (!issue.current_journal.empty?)
-
+               && (!issue.current_journal.empty?)
+              
               Mailer.deliver_issue_edit(issue.current_journal)
             end
           else
