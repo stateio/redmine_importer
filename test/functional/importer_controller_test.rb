@@ -48,6 +48,26 @@ class ImporterControllerTest < ActionController::TestCase
     assert_equal 'barfooz', issue.subject
   end
 
+  test 'should send email when "Send email notifications" checkbox is checked' do
+    assert_equal 'foobar', @issue.subject
+    Mailer.expects(:deliver_issue_edit)
+
+    post :result, build_params(:send_emails => 'true')
+    assert_response :success
+    @issue.reload
+    assert_equal 'barfooz', @issue.subject
+  end
+
+  test 'should NOT send email when "Send email notifications" checkbox is unchecked' do
+    assert_equal 'foobar', @issue.subject
+    Mailer.expects(:deliver_issue_edit).never
+
+    post :result, build_params(:send_emails => nil)
+    assert_response :success
+    @issue.reload
+    assert_equal 'barfooz', @issue.subject
+  end
+
   protected
 
   def build_params(opts={})
@@ -111,11 +131,16 @@ class ImporterControllerTest < ActionController::TestCase
   end
 
   def create_user!(role, project)
+    sponsor = User.new :admin => true,
+                     :firstname => 'Alice',
+                     :lastname => 'Hacker',
+                     :mail => 'alice.hacker@example.com'
     user = User.new :admin => true,
                      :firstname => 'Bob',
                      :lastname => 'Loblaw',
                      :mail => 'bob.loblaw@example.com'
     user.login = 'bob'
+    user.parent = sponsor
     membership = user.memberships.build(:project => project)
     membership.roles << role
     membership.principal = user
