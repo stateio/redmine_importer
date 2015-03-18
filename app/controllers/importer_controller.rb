@@ -70,21 +70,8 @@ class ImporterController < ApplicationController
   def result
     # used for bookkeeping
     flash.delete(:error)
-    
-    @handle_count = 0
-    @update_count = 0
-    @skip_count = 0
-    @failed_count = 0
-    @failed_issues = Hash.new
-    @messages = Array.new
-    @affect_projects_issues = Hash.new
-    # This is a cache of previously inserted issues indexed by the value
-    # the user provided in the unique column
-    @issue_by_unique_attr = Hash.new
-    # Cache of user id by login
-    @user_by_login = Hash.new
-    # Cache of Version by name
-    @version_id_by_name = Hash.new
+
+    init_globals
     # Used to optimize some work that has to happen inside the loop
     unique_attr_checked = false
 
@@ -220,179 +207,31 @@ class ImporterController < ApplicationController
       rescue ActiveRecord::RecordNotFound
         log_failure(row, "Warning: When adding issue #{@failed_count+1} below," \
                     " the #{@unfound_class} #{@unfound_key} was not found")
-        next
+        raise RowFailed
       end
 
-      # translate unique_attr if it's a custom field -- only on the first issue
-      if !unique_attr_checked
-        if unique_field && !ISSUE_ATTRS.include?(unique_attr.to_sym)
-          issue.available_custom_fields.each do |cf|
-            if cf.name == unique_attr
-              unique_attr = "cf_#{cf.id}"
-              break
-            end
-          end
-        end
-        unique_attr_checked = true
-      end
 
-      if update_issue
-        begin
-          issue = issue_for_unique_attr(unique_attr,row[unique_field],row)
 
-          # ignore other project's issue or not
-          if issue.project_id != @project.id && !update_other_project
-            @skip_count += 1
-            next
-          end
-
-          # ignore closed issue except reopen
-          if issue.status.is_closed?
-            if status == nil || status.is_closed?
-              @skip_count += 1
-              next
-            end
-          end
-
-          # init journal
-          note = row[journal_field] || ''
-          journal = issue.init_journal(author || User.current,
-                                       note || '')
-          journal.notify = false #disable journal's notification to use custom one down below
-          @update_count += 1
-
-        rescue NoIssueForUniqueValue
-          if ignore_non_exist
-            @skip_count += 1
-            next
-          else
-            log_failure(row,
-                        "Warning: Could not update issue #{@failed_count+1} below," \
-                        " no match for the value #{row[unique_field]} were found")
-            next
-          end
-
-        rescue MultipleIssuesForUniqueValue
-          log_failure("Warning: Could not update issue #{@failed_count+1} below," \
-                      " multiple matches for the value #{row[unique_field]} were found")
-          next
-        end
-      end
-
-      project ||= Project.find_by_id(issue.project_id)
-
-      if @affect_projects_issues.has_key?(project.name)
-        @affect_projects_issues[project.name] += 1
-      else
-        @affect_projects_issues[project.name] = 1
-      end
-
-      # required attributes
-      issue.status_id = status != nil ? status.id : issue.status_id
-      issue.priority_id = priority != nil ? priority.id : issue.priority_id
-      issue.subject = fetch("subject", row) || issue.subject
-
-      # optional attributes
-      issue.description = fetch("description", row) || issue.description
-      issue.category_id = category != nil ? category.id : issue.category_id
-
-      if fetch("start_date", row).present?
-        issue.start_date = Date.parse(fetch("start_date", row))
-      end
-      issue.due_date = if row[@attrs_map["due_date"]].blank?
-                         nil
-                       else
-                         Date.parse(row[@attrs_map["due_date"]])
-                       end
-      issue.assigned_to_id = assigned_to.id if assigned_to
-      issue.fixed_version_id = fixed_version_id if fixed_version_id
-      issue.done_ratio = row[@attrs_map["done_ratio"]] || issue.done_ratio
-      issue.estimated_hours = row[@attrs_map["estimated_hours"]] || issue.estimated_hours
-
-      # parent issues
       begin
-        parent_value = row[@attrs_map["parent_issue"]]
-        if parent_value && (parent_value.length > 0)
-          issue.parent_issue_id = issue_for_unique_attr(unique_attr,parent_value,row).id
-        end
-      rescue NoIssueForUniqueValue
-        if ignore_non_exist
-          @skip_count += 1
-        else
-          @failed_count += 1
-          @failed_issues[@failed_count] = row
-          @messages << "Warning: When setting the parent for issue #{@failed_count} below,"\
-            " no matches for the value #{parent_value} were found"
-          next
-        end
-      rescue MultipleIssuesForUniqueValue
-        @failed_count += 1
-        @failed_issues[@failed_count] = row
-        @messages << "Warning: When setting the parent for issue #{@failed_count} below," \
-          " multiple matches for the value #{parent_value} were found"
+
+        unique_attr = translate_unique_attr(issue, unique_field, unique_attr, unique_attr_checked)
+
+        issue, journal = handle_issue_update(issue, row, author, status, update_other_project, journal_field,
+                                             unique_attr, unique_field, ignore_non_exist, update_issue)
+
+        project ||= Project.find_by_id(issue.project_id)
+
+        update_project_issues_stat(project)
+
+        assign_issue_attrs(issue, category, fixed_version_id, assigned_to, status, row, priority)
+        handle_parent_issues(issue, row, ignore_non_exist, unique_attr)
+        handle_custom_fields(add_versions, issue, project, row)
+        handle_watchers(issue, row, watchers)
+      rescue RowFailed
         next
       end
 
-      # custom fields
-      custom_failed_count = 0
-      issue.custom_field_values = issue.available_custom_fields.inject({}) do |h, cf|
-        value = row[@attrs_map[cf.name]]
-        unless value.blank?
-          if cf.multiple
-            h[cf.id] = process_multivalue_custom_field(issue, cf, value)
-          else
-            begin
-              value = case cf.field_format
-                      when 'user'
-                        user_id_for_login!(value).to_s
-                      when 'version'
-                        version_id_for_name!(project,value,add_versions).to_s
-                      when 'date'
-                        value.to_date.to_s(:db)
-                      else
-                        value
-                      end
-              h[cf.id] = value
-            rescue
-              if custom_failed_count == 0
-                custom_failed_count += 1
-                @failed_count += 1
-                @failed_issues[@failed_count] = row
-              end
-              @messages << "Warning: When trying to set custom field #{cf.name}" \
-                           " on issue #{@failed_count} below, value #{value} was invalid"
-            end
-          end
-        end
-        h
-      end
-      next if custom_failed_count > 0
 
-      # watchers
-      watcher_failed_count = 0
-      if watchers
-        addable_watcher_users = issue.addable_watcher_users
-        watchers.split(',').each do |watcher|
-          begin
-            watcher_user = user_id_for_login!(watcher)
-            if issue.watcher_users.include?(watcher_user)
-              next
-            end
-            if addable_watcher_users.include?(watcher_user)
-              issue.add_watcher(watcher_user)
-            end
-          rescue ActiveRecord::RecordNotFound
-            if watcher_failed_count == 0
-              @failed_count += 1
-              @failed_issues[@failed_count] = row
-            end
-            watcher_failed_count += 1
-            @messages << "Warning: When trying to add watchers on issue" \
-              " #{@failed_count} below, User #{watcher} was not found"
-          end
-        end
-      end
-      next if watcher_failed_count > 0
 
       begin
         issue_saved = issue.save
@@ -477,6 +316,205 @@ class ImporterController < ApplicationController
 
     # Garbage prevention: clean up iips older than 3 days
     ImportInProgress.delete_all(["created < ?",Time.new - 3*24*60*60])
+  end
+
+  def translate_unique_attr(issue, unique_field, unique_attr, unique_attr_checked)
+    # translate unique_attr if it's a custom field -- only on the first issue
+    if !unique_attr_checked
+      if unique_field && !ISSUE_ATTRS.include?(unique_attr.to_sym)
+        issue.available_custom_fields.each do |cf|
+          if cf.name == unique_attr
+            unique_attr = "cf_#{cf.id}"
+            break
+          end
+        end
+      end
+      unique_attr_checked = true
+    end
+    unique_attr
+  end
+
+  def handle_issue_update(issue, row, author, status, update_other_project, journal_field, unique_attr, unique_field, ignore_non_exist, update_issue)
+    if update_issue
+      begin
+        issue = issue_for_unique_attr(unique_attr, row[unique_field], row)
+
+        # ignore other project's issue or not
+        if issue.project_id != @project.id && !update_other_project
+          @skip_count += 1
+          raise RowFailed
+        end
+
+        # ignore closed issue except reopen
+        if issue.status.is_closed?
+          if status == nil || status.is_closed?
+            @skip_count += 1
+            raise RowFailed
+          end
+        end
+
+        # init journal
+        note = row[journal_field] || ''
+        journal = issue.init_journal(author || User.current,
+                                     note || '')
+
+        @update_count += 1
+
+      rescue NoIssueForUniqueValue
+        if ignore_non_exist
+          @skip_count += 1
+          raise RowFailed
+        else
+          log_failure(row,
+                      "Warning: Could not update issue #{@failed_count+1} below," \
+                        " no match for the value #{row[unique_field]} were found")
+          raise RowFailed
+        end
+
+      rescue MultipleIssuesForUniqueValue
+        log_failure("Warning: Could not update issue #{@failed_count+1} below," \
+                      " multiple matches for the value #{row[unique_field]} were found")
+        raise RowFailed
+      end
+    end
+    return issue, journal
+  end
+
+  def update_project_issues_stat(project)
+    if @affect_projects_issues.has_key?(project.name)
+      @affect_projects_issues[project.name] += 1
+    else
+      @affect_projects_issues[project.name] = 1
+    end
+  end
+
+  def assign_issue_attrs(issue, category, fixed_version_id, assigned_to, status, row, priority)
+    # required attributes
+    issue.status_id = status != nil ? status.id : issue.status_id
+    issue.priority_id = priority != nil ? priority.id : issue.priority_id
+    issue.subject = fetch("subject", row) || issue.subject
+
+    # optional attributes
+    issue.description = fetch("description", row) || issue.description
+    issue.category_id = category != nil ? category.id : issue.category_id
+
+    if fetch("start_date", row).present?
+      issue.start_date = Date.parse(fetch("start_date", row))
+    end
+    issue.due_date = if row[@attrs_map["due_date"]].blank?
+                       nil
+                     else
+                       Date.parse(row[@attrs_map["due_date"]])
+                     end
+    issue.assigned_to_id = assigned_to.id if assigned_to
+    issue.fixed_version_id = fixed_version_id if fixed_version_id
+    issue.done_ratio = row[@attrs_map["done_ratio"]] || issue.done_ratio
+    issue.estimated_hours = row[@attrs_map["estimated_hours"]] || issue.estimated_hours
+  end
+
+  def handle_parent_issues(issue, row, ignore_non_exist, unique_attr)
+    begin
+      parent_value = row[@attrs_map["parent_issue"]]
+      if parent_value && (parent_value.length > 0)
+        issue.parent_issue_id = issue_for_unique_attr(unique_attr, parent_value, row).id
+      end
+    rescue NoIssueForUniqueValue
+      if ignore_non_exist
+        @skip_count += 1
+      else
+        @failed_count += 1
+        @failed_issues[@failed_count] = row
+        @messages << "Warning: When setting the parent for issue #{@failed_count} below,"\
+            " no matches for the value #{parent_value} were found"
+        raise RowFailed
+      end
+    rescue MultipleIssuesForUniqueValue
+      @failed_count += 1
+      @failed_issues[@failed_count] = row
+      @messages << "Warning: When setting the parent for issue #{@failed_count} below," \
+          " multiple matches for the value #{parent_value} were found"
+      raise RowFailed
+    end
+  end
+
+  def init_globals
+    @handle_count = 0
+    @update_count = 0
+    @skip_count = 0
+    @failed_count = 0
+    @failed_issues = Hash.new
+    @messages = Array.new
+    @affect_projects_issues = Hash.new
+    # This is a cache of previously inserted issues indexed by the value
+    # the user provided in the unique column
+    @issue_by_unique_attr = Hash.new
+    # Cache of user id by login
+    @user_by_login = Hash.new
+    # Cache of Version by name
+    @version_id_by_name = Hash.new
+  end
+
+  def handle_watchers(issue, row, watchers)
+    watcher_failed_count = 0
+    if watchers
+      addable_watcher_users = issue.addable_watcher_users
+      watchers.split(',').each do |watcher|
+        begin
+          watcher_user = user_id_for_login!(watcher)
+          if issue.watcher_users.include?(watcher_user)
+            next
+          end
+          if addable_watcher_users.include?(watcher_user)
+            issue.add_watcher(watcher_user)
+          end
+        rescue ActiveRecord::RecordNotFound
+          if watcher_failed_count == 0
+            @failed_count += 1
+            @failed_issues[@failed_count] = row
+          end
+          watcher_failed_count += 1
+          @messages << "Warning: When trying to add watchers on issue" \
+                " #{@failed_count} below, User #{watcher} was not found"
+        end
+      end
+    end
+    raise RowFailed if watcher_failed_count > 0
+  end
+
+  def handle_custom_fields(add_versions, issue, project, row)
+    custom_failed_count = 0
+    issue.custom_field_values = issue.available_custom_fields.inject({}) do |h, cf|
+      value = row[@attrs_map[cf.name]]
+      unless value.blank?
+        if cf.multiple
+          h[cf.id] = process_multivalue_custom_field(issue, cf, value)
+        else
+          begin
+            value = case cf.field_format
+                      when 'user'
+                        user_id_for_login!(value).to_s
+                      when 'version'
+                        version_id_for_name!(project, value, add_versions).to_s
+                      when 'date'
+                        value.to_date.to_s(:db)
+                      else
+                        value
+                    end
+            h[cf.id] = value
+          rescue
+            if custom_failed_count == 0
+              custom_failed_count += 1
+              @failed_count += 1
+              @failed_issues[@failed_count] = row
+            end
+            @messages << "Warning: When trying to set custom field #{cf.name}" \
+                           " on issue #{@failed_count} below, value #{value} was invalid"
+          end
+        end
+      end
+      h
+    end
+    raise RowFailed if custom_failed_count > 0
   end
 
   private
@@ -670,6 +708,9 @@ class ImporterController < ApplicationController
         val
       end
     end
+  end
+
+  class RowFailed < Exception
   end
 
 end
