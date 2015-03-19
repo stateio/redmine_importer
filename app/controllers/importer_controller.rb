@@ -70,7 +70,7 @@ class ImporterController < ApplicationController
   def result
     # used for bookkeeping
     flash.delete(:error)
-
+    
     @handle_count = 0
     @update_count = 0
     @skip_count = 0
@@ -258,7 +258,7 @@ class ImporterController < ApplicationController
           note = row[journal_field] || ''
           journal = issue.init_journal(author || User.current,
                                        note || '')
-
+          journal.notify = false #disable journal's notification to use custom one down below
           @update_count += 1
 
         rescue NoIssueForUniqueValue
@@ -338,26 +338,30 @@ class ImporterController < ApplicationController
       issue.custom_field_values = issue.available_custom_fields.inject({}) do |h, cf|
         value = row[@attrs_map[cf.name]]
         unless value.blank?
-          begin
-            value = case cf.field_format
-                    when 'user'
-                      user_id_for_login!(value).to_s
-                    when 'version'
-                      version_id_for_name!(project,value,add_versions).to_s
-                    when 'date'
-                      value.to_date.to_s(:db)
-                    else
-                      value
-                    end
-            h[cf.id] = value
-          rescue
-            if custom_failed_count == 0
-              custom_failed_count += 1
-              @failed_count += 1
-              @failed_issues[@failed_count] = row
+          if cf.multiple
+            h[cf.id] = process_multivalue_custom_field(issue, cf, value)
+          else
+            begin
+              value = case cf.field_format
+                      when 'user'
+                        user_id_for_login!(value).to_s
+                      when 'version'
+                        version_id_for_name!(project,value,add_versions).to_s
+                      when 'date'
+                        value.to_date.to_s(:db)
+                      else
+                        value
+                      end
+              h[cf.id] = value
+            rescue
+              if custom_failed_count == 0
+                custom_failed_count += 1
+                @failed_count += 1
+                @failed_issues[@failed_count] = row
+              end
+              @messages << "Warning: When trying to set custom field #{cf.name}" \
+                           " on issue #{@failed_count} below, value #{value} was invalid"
             end
-            @messages << "Warning: When trying to set custom field #{cf.name}" \
-              " on issue #{@failed_count} below, value #{value} was invalid"
           end
         end
         h
@@ -413,8 +417,8 @@ class ImporterController < ApplicationController
         if send_emails
           if update_issue
             if Setting.notified_events.include?('issue_updated') \
-              && (!issue.current_journal.empty?)
-
+               && (!issue.current_journal.empty?)
+              
               Mailer.deliver_issue_edit(issue.current_journal)
             end
           else
@@ -423,7 +427,7 @@ class ImporterController < ApplicationController
             end
           end
         end
-
+        
         # Issue relations
         begin
           IssueRelation::TYPES.each_pair do |rtype, rinfo|
@@ -655,6 +659,17 @@ class ImporterController < ApplicationController
       @version_id_by_name[name] = version.id
     end
     @version_id_by_name[name]
+  end
+
+  def process_multivalue_custom_field(issue, custom_field, csv_val)
+    csv_val.split(',').map(&:strip).map do |val|
+      if custom_field.field_format == 'version'
+        version = Version.find_by_name val
+        version.id
+      else
+        val
+      end
+    end
   end
 
 end
