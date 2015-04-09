@@ -140,6 +140,10 @@ class ImporterControllerTest < ActionController::TestCase
                      :lastname => 'Loblaw',
                      :mail => 'bob.loblaw@example.com'
     user.login = 'bob'
+    sponsor = User.new :admin => true,
+                       :firstname => 'A',
+                       :lastname => 'H',
+                       :mail => 'a@example.com'
     user.parent = sponsor
     membership = user.memberships.build(:project => project)
     membership.roles << role
