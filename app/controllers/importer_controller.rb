@@ -27,7 +27,7 @@ class ImporterController < ApplicationController
     # Delete existing iip to ensure there can't be two iips for a user
     ImportInProgress.delete_all(["user_id = ?",User.current.id])
     # save import-in-progress data
-    iip = ImportInProgress.find_or_create_by_user_id(User.current.id)
+    iip = ImportInProgress.find_or_create_by(user_id: User.current.id)
     iip.quote_char = params[:wrapper]
     iip.col_sep = params[:splitter]
     iip.encoding = params[:encoding]
@@ -87,7 +87,6 @@ class ImporterController < ApplicationController
         "This import cannot be completed"
       return
     end
-
     # which options were turned on?
     update_issue = params[:update_issue]
     update_other_project = params[:update_other_project]
@@ -370,7 +369,8 @@ class ImporterController < ApplicationController
         end
 
       rescue MultipleIssuesForUniqueValue
-        log_failure("Warning: Could not update issue #{@failed_count+1} below," \
+        log_failure(row,
+                    "Warning: Could not update issue #{@failed_count+1} below," \
                       " multiple matches for the value #{row[unique_field]} were found")
         raise RowFailed
       end
