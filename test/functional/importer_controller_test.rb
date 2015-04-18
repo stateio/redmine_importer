@@ -8,7 +8,7 @@ class ImporterControllerTest < ActionController::TestCase
     @tracker.save!
     @project.trackers << @tracker
     @project.save!
-    @role = Role.create! :name => 'ADMIN', :permissions => [:import]
+    @role = Role.create! :name => 'ADMIN', :permissions => [:import, :view_issues]
     @user = create_user!(@role, @project)
     @iip = create_iip_for_multivalues!(@user, @project)
     @issue = create_issue!(@project, @user)
@@ -72,6 +72,14 @@ class ImporterControllerTest < ActionController::TestCase
     assert_equal 'barfooz', @issue.subject
   end
 
+  test 'should add watchers' do
+    assert issue_has_none_of_these_watchers?(@issue, [@user, @user.parent])
+    post :result, build_params
+    assert_response :success
+    @issue.reload
+    assert issue_has_all_of_these_watchers?(@issue, [@user, @user.parent])
+  end
+
   protected
 
   def build_params(opts={})
@@ -88,7 +96,8 @@ class ImporterControllerTest < ActionController::TestCase
         'Affected versions' => 'Affected versions',
         'Priority' => 'priority',
         'Tracker' => 'tracker',
-        'Status' => 'status'
+        'Status' => 'status',
+        'Watchers' => 'watchers'
       }
     )
   end
@@ -102,6 +111,18 @@ class ImporterControllerTest < ActionController::TestCase
   def issue_has_none_of_these_multival_versions?(issue, version_names)
     find_version_ids(version_names).none? do |version_to_find|
       versions_for(issue).include?(version_to_find)
+    end
+  end
+
+  def issue_has_none_of_these_watchers?(issue, watchers)
+    watchers.none? do |watcher|
+      issue.watcher_users.include?(watcher)
+    end
+  end
+
+  def issue_has_all_of_these_watchers?(issue, watchers)
+    watchers.all? do |watcher|
+      issue.watcher_users.include?(watcher)
     end
   end
 
@@ -136,23 +157,28 @@ class ImporterControllerTest < ActionController::TestCase
   end
 
   def create_user!(role, project)
-    sponsor = User.new :admin => true,
-                     :firstname => 'Alice',
-                     :lastname => 'Hacker',
-                     :mail => 'alice.hacker@example.com'
     user = User.new :admin => true,
-                     :firstname => 'Bob',
-                     :lastname => 'Loblaw',
-                     :mail => 'bob.loblaw@example.com'
+                    :login => 'bob',
+                    :firstname => 'Bob',
+                    :lastname => 'Loblaw',
+                    :mail => 'bob.loblaw@example.com'
     user.login = 'bob'
     sponsor = User.new :admin => true,
                        :firstname => 'A',
                        :lastname => 'H',
                        :mail => 'a@example.com'
+    sponsor.login = 'alice'
+    sponsor.parent = sponsor
+
     user.parent = sponsor
     membership = user.memberships.build(:project => project)
     membership.roles << role
     membership.principal = user
+
+    membership = sponsor.memberships.build(:project => project)
+    membership.roles << role
+    membership.principal = sponsor
+    sponsor.save!
     user.save!
     user
   end

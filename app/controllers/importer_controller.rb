@@ -458,7 +458,7 @@ class ImporterController < ApplicationController
       addable_watcher_users = issue.addable_watcher_users
       watchers.split(',').each do |watcher|
         begin
-          watcher_user = user_id_for_login!(watcher)
+          watcher_user = user_for_login!(watcher)
           if issue.watcher_users.include?(watcher_user)
             next
           end
@@ -669,6 +669,7 @@ class ImporterController < ApplicationController
     end
     @user_by_login[login]
   end
+
   def user_id_for_login!(login)
     user = user_for_login!(login)
     user ? user.id : nil
