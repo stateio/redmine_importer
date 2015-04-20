@@ -3,8 +3,12 @@ require File.expand_path('../../test_helper', __FILE__)
 class ImporterControllerTest < ActionController::TestCase
   def setup
     @project = Project.create! :name => 'foo'
-    @tracker = @project.trackers.create(:name => 'Defect')
-    @role = Role.create! :name => 'ADMIN', :permissions => [:import]
+    @tracker = Tracker.new(:name => 'Defect')
+    @tracker.default_status = IssueStatus.find_or_create_by!(name: 'New')
+    @tracker.save!
+    @project.trackers << @tracker
+    @project.save!
+    @role = Role.create! :name => 'ADMIN', :permissions => [:import, :view_issues]
     @user = create_user!(@role, @project)
     @iip = create_iip_for_multivalues!(@user, @project)
     @issue = create_issue!(@project, @user)
@@ -14,20 +18,20 @@ class ImporterControllerTest < ActionController::TestCase
   end
 
   test 'should handle multiple values for versions' do
-    assert issue_has_none_of_these_affected_versions?(@issue,
+    assert issue_has_none_of_these_multival_versions?(@issue,
                                                       ['Admin', '2013-09-25'])
     post :result, build_params
     assert_response :success
     @issue.reload
-    assert issue_has_all_these_affected_versions?(@issue, ['Admin', '2013-09-25'])
+    assert issue_has_all_these_multival_versions?(@issue, ['Admin', '2013-09-25'])
   end
 
-  test 'should handle multiple values for tags' do
-    assert issue_has_none_of_these_tags?(@issue, ['tag1', 'tag2'])
+  test 'should handle multiple values' do
+    assert issue_has_none_of_these_multifield_vals?(@issue, ['tag1', 'tag2'])
     post :result, build_params
     assert_response :success
     @issue.reload
-    assert issue_has_all_these_tags?(@issue, ['tag1', 'tag2'])
+    assert issue_has_all_these_multifield_vals?(@issue, ['tag1', 'tag2'])
   end
 
   test 'should handle single-value fields' do
@@ -48,7 +52,7 @@ class ImporterControllerTest < ActionController::TestCase
     assert_equal 'barfooz', issue.subject
   end
 
-  test 'should send email when "Send email notifications" checkbox is checked' do
+  test 'should send email when Send email notifications checkbox is checked' do
     assert_equal 'foobar', @issue.subject
     Mailer.expects(:deliver_issue_edit)
 
@@ -58,7 +62,7 @@ class ImporterControllerTest < ActionController::TestCase
     assert_equal 'barfooz', @issue.subject
   end
 
-  test 'should NOT send email when "Send email notifications" checkbox is unchecked' do
+  test 'should NOT send email when Send email notifications checkbox is unchecked' do
     assert_equal 'foobar', @issue.subject
     Mailer.expects(:deliver_issue_edit).never
 
@@ -68,9 +72,18 @@ class ImporterControllerTest < ActionController::TestCase
     assert_equal 'barfooz', @issue.subject
   end
 
+  test 'should add watchers' do
+    assert issue_has_none_of_these_watchers?(@issue, [@user, @user.parent])
+    post :result, build_params
+    assert_response :success
+    @issue.reload
+    assert issue_has_all_of_these_watchers?(@issue, [@user, @user.parent])
+  end
+
   protected
 
   def build_params(opts={})
+    @iip.reload
     opts.reverse_merge(
       :import_timestamp => @iip.created.strftime("%Y-%m-%d %H:%M:%S"),
       :update_issue => 'true',
@@ -83,20 +96,33 @@ class ImporterControllerTest < ActionController::TestCase
         'Affected versions' => 'Affected versions',
         'Priority' => 'priority',
         'Tracker' => 'tracker',
-        'Status' => 'status'
+        'Status' => 'status',
+        'Watchers' => 'watchers'
       }
     )
   end
   
-  def issue_has_all_these_affected_versions?(issue, version_names)
+  def issue_has_all_these_multival_versions?(issue, version_names)
     find_version_ids(version_names).all? do |version_to_find|
       versions_for(issue).include?(version_to_find)
     end
   end
   
-  def issue_has_none_of_these_affected_versions?(issue, version_names)
+  def issue_has_none_of_these_multival_versions?(issue, version_names)
     find_version_ids(version_names).none? do |version_to_find|
       versions_for(issue).include?(version_to_find)
+    end
+  end
+
+  def issue_has_none_of_these_watchers?(issue, watchers)
+    watchers.none? do |watcher|
+      issue.watcher_users.include?(watcher)
+    end
+  end
+
+  def issue_has_all_of_these_watchers?(issue, watchers)
+    watchers.all? do |watcher|
+      issue.watcher_users.include?(watcher)
     end
   end
 
@@ -108,46 +134,51 @@ class ImporterControllerTest < ActionController::TestCase
 
   def versions_for(issue)
     versions_field = CustomField.find_by_name! 'Affected versions'
-    value_objs = issue.custom_values.find_all_by_custom_field_id versions_field.id
+    value_objs = issue.custom_values.where(custom_field_id: versions_field.id)
     values = value_objs.map(&:value)
   end
   
-  def issue_has_all_these_tags?(issue, tags_to_find)
-    tags_to_find.all? do |tag_to_find|
-      tags_for(issue).include?(tag_to_find)
+  def issue_has_all_these_multifield_vals?(issue, vals_to_find)
+    vals_to_find.all? do |val_to_find|
+      multifield_vals_for(issue).include?(val_to_find)
     end
   end
   
-  def issue_has_none_of_these_tags?(issue, tags_to_find)
-    tags_to_find.none? do |tag_to_find|
-      tags_for(issue).include?(tag_to_find)
+  def issue_has_none_of_these_multifield_vals?(issue, vals_to_find)
+    vals_to_find.none? do |val_to_find|
+      multifield_vals_for(issue).include?(val_to_find)
     end
   end
 
-  def tags_for(issue)
-    tags_field = CustomField.find_by_name! 'Tags'
-    value_objs = issue.custom_values.find_all_by_custom_field_id(tags_field.id)
+  def multifield_vals_for(issue)
+    multival_field = CustomField.find_by_name! 'Tags'
+    value_objs = issue.custom_values.where(custom_field_id: multival_field.id)
     values = value_objs.map(&:value)
   end
 
   def create_user!(role, project)
-    sponsor = User.new :admin => true,
-                     :firstname => 'Alice',
-                     :lastname => 'Hacker',
-                     :mail => 'alice.hacker@example.com'
     user = User.new :admin => true,
-                     :firstname => 'Bob',
-                     :lastname => 'Loblaw',
-                     :mail => 'bob.loblaw@example.com'
+                    :login => 'bob',
+                    :firstname => 'Bob',
+                    :lastname => 'Loblaw',
+                    :mail => 'bob.loblaw@example.com'
     user.login = 'bob'
     sponsor = User.new :admin => true,
                        :firstname => 'A',
                        :lastname => 'H',
                        :mail => 'a@example.com'
+    sponsor.login = 'alice'
+    sponsor.parent = sponsor
+
     user.parent = sponsor
     membership = user.memberships.build(:project => project)
     membership.roles << role
     membership.principal = user
+
+    membership = sponsor.memberships.build(:project => project)
+    membership.roles << role
+    membership.principal = sponsor
+    sponsor.save!
     user.save!
     user
   end
@@ -159,8 +190,8 @@ class ImporterControllerTest < ActionController::TestCase
   def create_iip!(filename, user, project)
     iip = ImportInProgress.new
     iip.user = user
-    iip.project = project
     iip.csv_data = get_csv(filename)
+    #iip.created = DateTime.new(2001,2,3,4,5,6,'+7')
     iip.created = DateTime.now
     iip.encoding = 'U'
     iip.col_sep = ','
@@ -177,7 +208,7 @@ class ImporterControllerTest < ActionController::TestCase
     issue.create_priority!(name: 'Critical')
     issue.tracker = project.trackers.first
     issue.author = author
-    issue.create_status!(name: 'New')
+    issue.status = IssueStatus.find_or_create_by!(name: 'New')
     issue.save!
     issue
   end
@@ -186,12 +217,12 @@ class ImporterControllerTest < ActionController::TestCase
     versions_field = create_multivalue_field!('Affected versions',
                                               'version',
                                               issue.project)
-    tags_field =     create_multivalue_field!('Tags',
+    multival_field =     create_multivalue_field!('Tags',
                                               'list',
                                               issue.project,
                                               %w(tag1 tag2))
     issue.tracker.custom_fields << versions_field
-    issue.tracker.custom_fields << tags_field
+    issue.tracker.custom_fields << multival_field
     issue.tracker.save!
   end
 
