@@ -629,11 +629,11 @@ class ImporterController < ApplicationController
       query.add_filter("status_id", "*", [1])
       query.add_filter(unique_attr, "=", [attr_value])
 
-      issues = Issue.find :all,
-        :conditions => query.statement,
-        :limit => 2,
-        :include => [ :assigned_to, :status, :tracker, :project, :priority,
-                      :category, :fixed_version ]
+      issues = Issue.joins([:project])
+                    .includes([ :assigned_to, :status, :tracker, :project, :priority,
+                      :category, :fixed_version ])
+                    .limit(2)
+                    .where(query.statement)
     end
 
     if issues.size > 1
@@ -643,7 +643,7 @@ class ImporterController < ApplicationController
         "'#{attr_value}' in issue #{@failed_count} has duplicate record"
       raise MultipleIssuesForUniqueValue, "Unique field #{unique_attr} with" \
         " value '#{attr_value}' has duplicate record"
-    elsif issues.size == 0 || issue[0].nil?
+    elsif issues.size == 0 || issues[0].nil?
       raise NoIssueForUniqueValue, "No issue with #{unique_attr} of '#{attr_value}' found"
     else
       issues.first
