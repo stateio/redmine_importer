@@ -485,7 +485,7 @@ class ImporterController < ApplicationController
       value = row[@attrs_map[cf.name]]
       unless value.blank?
         if cf.multiple
-          h[cf.id] = process_multivalue_custom_field(issue, cf, value)
+          h[cf.id] = process_multivalue_custom_field(project, add_versions, issue, cf, value)
         else
           begin
             value = case cf.field_format
@@ -629,11 +629,11 @@ class ImporterController < ApplicationController
       query.add_filter("status_id", "*", [1])
       query.add_filter(unique_attr, "=", [attr_value])
 
-      issues = Issue.find :all,
-        :conditions => query.statement,
-        :limit => 2,
-        :include => [ :assigned_to, :status, :tracker, :project, :priority,
-                      :category, :fixed_version ]
+      issues = Issue.joins([:project])
+                    .includes([ :assigned_to, :status, :tracker, :project, :priority,
+                      :category, :fixed_version ])
+                    .limit(2)
+                    .where(query.statement)
     end
 
     if issues.size > 1
@@ -697,11 +697,11 @@ class ImporterController < ApplicationController
     @version_id_by_name[name]
   end
 
-  def process_multivalue_custom_field(issue, custom_field, csv_val)
+  def process_multivalue_custom_field(project, add_versions, issue, custom_field, csv_val)
     csv_val.split(',').map(&:strip).map do |val|
       if custom_field.field_format == 'version'
         version = version_id_for_name!(project, val, add_versions)
-        version.id
+        version
       else
         val
       end
